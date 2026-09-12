@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Visual Analytics — Bench Sales Analytics</title>
+<link rel="stylesheet" href="shared/style.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js"></script>
+<style>
+  .chart-wrap.donut { height: 240px; }
+  .kpi-value { display: flex; align-items: baseline; gap: 8px; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="sidebar" id="sidebar"></div>
+  <div class="main">
+  <div class="app-shell">
+  <div class="topbar">
+    <div class="topbar-row">
+      <div>
+        <h1 class="app-title">ANALYTICS</h1>
+        <div class="app-subtitle">Understand candidate, recruiter and bench-sales performance · Version 7 — Visual Analytics</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button class="theme-toggle" id="theme-toggle" type="button">Theme</button>
+      </div>
+    </div>
+    <div class="global-search">
+      <span class="icon">🔍</span>
+      <input type="text" id="search-input" placeholder="Search candidate, recruiter, job, client, role..." />
+      <div class="search-results" id="search-results" hidden></div>
+    </div>
+    <div class="tabs" id="tabs"></div>
+  </div>
+
+  <div id="control-bar"></div>
+  <div class="filter-chip-row" id="filter-chips"></div>
+  <div id="compare-readout" class="compare-readout"></div>
+  <div id="tab-content"></div>
+  <div class="footer-note">Last updated Sep 12, 2026, 9:00 AM · Simulated data for UX comparison</div>
+  </div>
+  </div>
+</div>
+
+<script src="shared/data.js"></script>
+<script src="shared/app.js"></script>
+<script>
+const D = window.BenchData, A = window.App;
+const store = A.createStore({ periodKey: "this-quarter", compareMode: "previous-year" });
+A.renderSidebar(document.getElementById("sidebar"), "v7");
+A.wireThemeToggle(document.getElementById("theme-toggle"));
+let charts = {};
+
+const TABS = [
+  { id: "overview", label: "Overview" },
+  { id: "recruiters", label: "Recruiters" },
+  { id: "candidates", label: "Candidates" },
+  { id: "market", label: "Market" },
+];
+let activeTab = "overview";
+
+function destroyCharts() { Object.values(charts).forEach((c) => c && c.destroy()); charts = {}; }
+function renderTabs() {
+  const wrap = document.getElementById("tabs");
+  wrap.innerHTML = "";
+  TABS.forEach((t) => {
+    const el = document.createElement("div");
+    el.className = "tab" + (t.id === activeTab ? " active" : "");
+    el.textContent = t.label;
+    el.addEventListener("click", () => { activeTab = t.id; renderTabs(); renderActive(); });
+    wrap.appendChild(el);
+  });
+}
+function renderChrome() {
+  A.renderControlBar(document.getElementById("control-bar"), store, ["period", "compare", "granularity", "recruiter", "candidate", "platform", "filtersBtn"]);
+  document.getElementById("open-filters-btn").addEventListener("click", () => A.openFilterDrawer(store, ["role", "client", "location", "status"]));
+  A.activeFilterChips(document.getElementById("filter-chips"), store, []);
+}
+function renderCompareTable() {
+  const range = D.resolvePeriod(store.get().periodKey);
+  const cmp = D.comparePeriod(range, store.get().compareMode);
+  if (!cmp) { document.getElementById("compare-readout").innerHTML = ""; return; }
+  const filters = store.get();
+  const cur = D.computeKPIs(range, filters), prev = D.computeKPIs(cmp, filters);
+  const rows = [
+    { label: "Submissions", cur: cur.submissions, prev: prev.submissions },
+    { label: "Interviews", cur: cur.interviews, prev: prev.interviews },
+    { label: "Offers", cur: cur.offers, prev: prev.offers },
+    { label: "Placements", cur: cur.placements, prev: prev.placements },
+  ];
+  rows.__labels = ["Previous", "Current"];
+  A.renderCompareReadout(document.getElementById("compare-readout"), "Current vs. Comparison", rows);
+}
+function section(title, sub) {
+  const s = document.createElement("div"); s.className = "section";
+  if (title) s.innerHTML = `<div class="section-title">${title}</div>` + (sub ? `<div class="section-sub">${sub}</div>` : "");
+  return s;
+}
+function card() { const c = document.createElement("div"); c.className = "card"; return c; }
+
+// last-6-month trailing series for KPI sparklines, independent of selected period
+function trailingSeries(filters) {
+  const range = [new Date(D.TODAY.getFullYear(), D.TODAY.getMonth() - 5, 1), D.TODAY];
+  return D.monthlySeries(range, filters);
+}
+
+function renderOverview(root) {
+  const filters = store.get();
+  const range = D.resolvePeriod(filters.periodKey);
+  const cmp = D.comparePeriod(range, filters.compareMode);
+  const cur = D.computeKPIs(range, filters);
+  const prev = cmp ? D.computeKPIs(cmp, filters) : null;
+  const pd = (a, b) => (prev ? D.pctDelta(a, b) : null);
+  const trail = trailingSeries(filters);
+
+  const s1 = section("Executive Summary", "Each tile's sparkline shows the trailing 6-month trend for that metric.");
+  const kpiHost = document.createElement("div");
+  A.renderKPIBandSparkline(kpiHost, [
+    { label: "Submissions", value: A.formatNumber(cur.submissions), deltaPct: pd(cur.submissions, prev && prev.submissions), series: trail.map((s) => s.submissions) },
+    { label: "Interviews", value: A.formatNumber(cur.interviews), deltaPct: pd(cur.interviews, prev && prev.interviews), series: trail.map((s) => s.interviews) },
+    { label: "Offers", value: A.formatNumber(cur.offers), deltaPct: pd(cur.offers, prev && prev.offers), series: trail.map((s) => s.offers) },
+    { label: "Placements", value: A.formatNumber(cur.placements), deltaPct: pd(cur.placements, prev && prev.placements), series: trail.map((s) => s.placements) },
+    { label: "Interview Rate", value: A.formatPercent(cur.interviewRate * 100), deltaPct: prev ? (cur.interviewRate - prev.interviewRate) * 100 : null, deltaOpts: { label: "pts", suffix: "" }, series: trail.map((s) => (s.submissions ? (s.interviews / s.submissions) * 100 : 0)) },
+    { label: "Placement Rate", value: A.formatPercent(cur.placementRate * 100), deltaPct: prev ? (cur.placementRate - prev.placementRate) * 100 : null, deltaOpts: { label: "pts", suffix: "" }, series: trail.map((s) => (s.submissions ? (s.placements / s.submissions) * 100 : 0)) },
+  ]);
+  s1.appendChild(kpiHost); root.appendChild(s1);
+
+  const s2 = section("Volume Composition", "Submissions, interviews and placements stacked to show both total volume and mix over time — a shape a plain multi-line trend can't show.");
+  const c2 = card(); c2.innerHTML = `<div class="chart-wrap tall"><canvas id="chart-area"></canvas></div>`;
+  s2.appendChild(c2); root.appendChild(s2);
+  const wideRange = [new Date(D.TODAY.getFullYear() - 1, D.TODAY.getMonth() + 1, 1), D.TODAY];
+  const series = D.monthlySeries(wideRange, filters);
+  charts.area = A.areaChart(document.getElementById("chart-area"), series.map((s) => s.label), [
+    { label: "Placements", data: series.map((s) => s.placements), color: "--chart-2" },
+    { label: "Interviews", data: series.map((s) => s.interviews), color: "--chart-4" },
+    { label: "Submissions", data: series.map((s) => s.submissions), color: "--chart-1" },
+  ], { stacked: true });
+
+  const s3 = document.createElement("div"); s3.className = "section grid grid-2";
+  const statusCard = card();
+  statusCard.innerHTML = `<div class="card-header"><div class="card-title">Candidate Status Mix</div></div><div class="chart-wrap donut"><canvas id="chart-status-donut"></canvas></div>`;
+  const platCard = card();
+  platCard.innerHTML = `<div class="card-header"><div class="card-title">Submissions by Platform</div></div><div class="chart-wrap donut"><canvas id="chart-platform-donut"></canvas></div>`;
+  s3.appendChild(statusCard); s3.appendChild(platCard); root.appendChild(s3);
+  const statusCounts = D.candidateStatusBreakdown(filters);
+  const statusEntries = [...statusCounts.entries()].sort((a, b) => b[1] - a[1]);
+  charts.statusDonut = A.donutChart(document.getElementById("chart-status-donut"), statusEntries.map((e) => e[0]), statusEntries.map((e) => e[1]), {});
+  const platforms = D.platformPerformance(range, filters);
+  charts.platformDonut = A.donutChart(document.getElementById("chart-platform-donut"), platforms.map((p) => p.platform), platforms.map((p) => p.submissions), {
+    onClick: (evt, els) => { if (els.length) store.set({ platformId: platforms[els[0].index].id }); },
+  });
+
+  const s4 = document.createElement("div"); s4.className = "section grid grid-2";
+  const funnelCard = card();
+  funnelCard.innerHTML = `<div class="card-header"><div class="card-title">Candidate Funnel</div></div><div id="funnel-host"></div>`;
+  const roleCard = card();
+  roleCard.innerHTML = `<div class="card-header"><div class="card-title">Role Demand</div></div><div class="chart-wrap donut"><canvas id="chart-role-polar"></canvas></div>`;
+  s4.appendChild(funnelCard); s4.appendChild(roleCard); root.appendChild(s4);
+  A.renderFunnel(document.getElementById("funnel-host"), D.funnelCounts(range, filters).map((s, i) => ({ stage: i === 3 ? "Client Response" : s.stage, value: s.value })));
+  const roles = D.rolePerformance(range, filters);
+  charts.rolePolar = A.polarAreaChart(document.getElementById("chart-role-polar"), roles.map((r) => r.role), roles.map((r) => r.submissions), {
+    onClick: (evt, els) => { if (els.length) store.set({ roleId: roles[els[0].index].id }); },
+  });
+
+  const s5 = section("Recruiter Comparison", "Top 4 recruiters normalized across five dimensions (100 = the top performer on that dimension) — a radar shows shape, not just rank.");
+  const c5 = card(); c5.innerHTML = `<div class="chart-wrap tall"><canvas id="chart-radar"></canvas></div>`;
+  s5.appendChild(c5); root.appendChild(s5);
+  renderRecruiterRadar(range, filters);
+
+  const s6 = section("Insights");
+  const c6 = card();
+  const bestPlatform = [...platforms].sort((a, b) => b.interviewPct - a.interviewPct)[0];
+  const topRole = [...roles].sort((a, b) => b.submissions - a.submissions)[0];
+  const placedShare = statusCounts.get("Placed") || 0;
+  const totalCands = [...statusCounts.values()].reduce((a, b) => a + b, 0) || 1;
+  c6.innerHTML = `<ul class="insight-list">
+    <li><b>${((placedShare / totalCands) * 100).toFixed(0)}%</b> of the candidate pool is currently placed.</li>
+    <li><b>${bestPlatform ? bestPlatform.platform : "—"}</b> converts submissions to interviews most efficiently at ${A.formatPercent(bestPlatform ? bestPlatform.interviewPct : 0)}.</li>
+    <li><b>${topRole ? topRole.role : "—"}</b> is the highest-demand role this period by submission volume.</li>
+  </ul>`;
+  s6.appendChild(c6); root.appendChild(s6);
+}
+
+function recruiterRadarData(range, filters, topN) {
+  const recruiters = D.recruiterPerformance(range, filters).sort((a, b) => b.submissions - a.submissions).slice(0, topN || 4);
+  const metrics = ["submissions", "interviews", "offers", "placements"];
+  const maxes = {};
+  metrics.forEach((m) => { maxes[m] = Math.max(...recruiters.map((r) => r[m]), 1); });
+  const maxRate = Math.max(...recruiters.map((r) => r.placementRate), 1);
+  const labels = ["Submissions", "Interviews", "Offers", "Placements", "Placement Rate"];
+  const palette = ["--chart-1", "--chart-2", "--chart-3", "--chart-4", "--chart-5", "--chart-6"];
+  const series = recruiters.map((r, i) => ({
+    label: r.recruiter, color: palette[i % palette.length],
+    data: [
+      (r.submissions / maxes.submissions) * 100, (r.interviews / maxes.interviews) * 100,
+      (r.offers / maxes.offers) * 100, (r.placements / maxes.placements) * 100,
+      (r.placementRate / maxRate) * 100,
+    ].map((v) => +v.toFixed(1)),
+  }));
+  return { labels, series };
+}
+function renderRecruiterRadar(range, filters) {
+  if (charts.radar) charts.radar.destroy();
+  const { labels, series } = recruiterRadarData(range, filters, 4);
+  charts.radar = A.radarChart(document.getElementById("chart-radar"), labels, series);
+}
+
+function renderRecruiters(root) {
+  const filters = store.get();
+  const range = D.resolvePeriod(filters.periodKey);
+  const recruiters = D.recruiterPerformance(range, filters);
+
+  const s1 = section("Recruiter Leaderboard");
+  const t = card(); const tHost = document.createElement("div"); t.appendChild(tHost);
+  s1.appendChild(t); root.appendChild(s1);
+  A.renderTable(tHost, [
+    { key: "recruiter", label: "Recruiter" }, { key: "candidates", label: "Candidates", align: "right" },
+    { key: "submissions", label: "Submissions", align: "right" }, { key: "interviews", label: "Interviews", align: "right" },
+    { key: "placements", label: "Placements", align: "right" }, { key: "placementRate", label: "Placement %", align: "right", render: (r) => A.formatPercent(r.placementRate) },
+    { key: "revenue", label: "Revenue", align: "right", render: (r) => A.formatCurrency(r.revenue) },
+  ], recruiters, { onRowClick: (r) => store.set({ recruiterId: r.id }) });
+
+  const s2 = section("All-Recruiter Radar", "All recruiters normalized across the same five dimensions.");
+  const c2 = card(); c2.innerHTML = `<div class="chart-wrap tall"><canvas id="chart-radar-all"></canvas></div>`;
+  s2.appendChild(c2); root.appendChild(s2);
+  const { labels, series } = recruiterRadarData(range, filters, 6);
+  charts.radarAll = A.radarChart(document.getElementById("chart-radar-all"), labels, series);
+
+  const s3 = section("Recruiter Workload", "Stacked to show each recruiter's total book of work by activity type.");
+  const c3 = card(); c3.innerHTML = `<div class="chart-wrap tall"><canvas id="chart-workload"></canvas></div>`;
+  s3.appendChild(c3); root.appendChild(s3);
+  charts.workload = A.barChart(document.getElementById("chart-workload"), recruiters.map((r) => r.recruiter), [
+    { label: "Submissions", data: recruiters.map((r) => r.submissions), color: "--chart-1" },
+    { label: "Interviews", data: recruiters.map((r) => r.interviews), color: "--chart-4" },
+    { label: "Placements", data: recruiters.map((r) => r.placements), color: "--chart-2" },
+  ], { stacked: true });
+}
+
+function renderCandidates(root) {
+  const filters = store.get();
+  const range = D.resolvePeriod(filters.periodKey);
+  const cands = D.CANDIDATES.filter((c) => D.matchesFilters(c, filters));
+  const counts = D.candidateStatusBreakdown(filters);
+
+  const s1 = section();
+  const kpiHost = document.createElement("div");
+  A.renderKPIBand(kpiHost, [
+    { label: "Total", value: A.formatNumber(cands.length) },
+    { label: "Available", value: A.formatNumber(counts.get("Available") || 0) },
+    { label: "Interviewing", value: A.formatNumber(counts.get("Interviewing") || 0) },
+    { label: "Placed", value: A.formatNumber(counts.get("Placed") || 0) },
+    { label: "At Risk", value: A.formatNumber(counts.get("At Risk") || 0) },
+  ]);
+  s1.appendChild(kpiHost); root.appendChild(s1);
+
+  const s2 = document.createElement("div"); s2.className = "section grid grid-2";
+  const donutCard = card(); donutCard.innerHTML = `<div class="card-header"><div class="card-title">Status Mix</div></div><div class="chart-wrap donut"><canvas id="chart-cand-donut"></canvas></div>`;
+  const agingCard = card(); agingCard.innerHTML = `<div class="card-header"><div class="card-title">Bench Aging</div></div><div class="chart-wrap short"><canvas id="chart-aging"></canvas></div>`;
+  s2.appendChild(donutCard); s2.appendChild(agingCard); root.appendChild(s2);
+  const statusEntries = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  charts.candDonut = A.donutChart(document.getElementById("chart-cand-donut"), statusEntries.map((e) => e[0]), statusEntries.map((e) => e[1]), {});
+  const aging = D.benchAgingBuckets(filters);
+  charts.aging = A.horizontalBarChart(document.getElementById("chart-aging"), Object.keys(aging), Object.values(aging), { color: "--chart-3" });
+
+  const s3 = section("Role Distribution", "Polar area — radius shows submission volume per role.");
+  const c3 = card(); c3.innerHTML = `<div class="chart-wrap tall"><canvas id="chart-role-polar2"></canvas></div>`;
+  s3.appendChild(c3); root.appendChild(s3);
+  const roles = D.rolePerformance(range, filters);
+  charts.rolePolar2 = A.polarAreaChart(document.getElementById("chart-role-polar2"), roles.map((r) => r.role), roles.map((r) => r.submissions), {
+    onClick: (evt, els) => { if (els.length) store.set({ roleId: roles[els[0].index].id }); },
+  });
+
+  const s4 = section("Candidate Leaderboard");
+  const c4 = card(); const lbHost = document.createElement("div"); c4.appendChild(lbHost);
+  s4.appendChild(c4); root.appendChild(s4);
+  const leaderboard = cands.map((c) => {
+    const subs = D.queryDataset({ range, filters: { candidateId: c.id }, dataset: D.SUBMISSIONS }).length;
+    const plc = D.queryDataset({ range, filters: { candidateId: c.id }, dataset: D.PLACEMENTS }).length;
+    return { name: c.name, id: c.id, role: c.role, submissions: subs, placements: plc };
+  }).sort((a, b) => b.submissions - a.submissions).slice(0, 20);
+  A.renderTable(lbHost, [
+    { key: "name", label: "Candidate" }, { key: "role", label: "Role" },
+    { key: "submissions", label: "Submissions", align: "right" }, { key: "placements", label: "Placements", align: "right" },
+  ], leaderboard, { onRowClick: (r) => store.set({ candidateId: r.id }) });
+}
+
+function renderMarket(root) {
+  const filters = store.get();
+  const range = D.resolvePeriod(filters.periodKey);
+  const s1 = document.createElement("div"); s1.className = "section grid grid-2";
+  const platCard = card(); platCard.innerHTML = `<div class="card-header"><div class="card-title">Platform Share</div></div><div class="chart-wrap donut"><canvas id="chart-market-platform"></canvas></div>`;
+  const locCard = card(); locCard.innerHTML = `<div class="card-header"><div class="card-title">Location Mix</div></div><div class="chart-wrap donut"><canvas id="chart-location-pie"></canvas></div>`;
+  s1.appendChild(platCard); s1.appendChild(locCard); root.appendChild(s1);
+  const platforms = D.platformPerformance(range, filters);
+  charts.marketPlatform = A.donutChart(document.getElementById("chart-market-platform"), platforms.map((p) => p.platform), platforms.map((p) => p.submissions), {
+    onClick: (evt, els) => { if (els.length) store.set({ platformId: platforms[els[0].index].id }); },
+  });
+  const cands = D.CANDIDATES.filter((c) => D.matchesFilters(c, filters));
+  const locMap = new Map(); D.LOCATIONS.forEach((l) => locMap.set(l, 0));
+  cands.forEach((c) => locMap.set(c.location, (locMap.get(c.location) || 0) + 1));
+  const locEntries = [...locMap.entries()].filter((e) => e[1] > 0).sort((a, b) => b[1] - a[1]);
+  charts.locationPie = A.donutChart(document.getElementById("chart-location-pie"), locEntries.map((e) => e[0]), locEntries.map((e) => e[1]), { pie: true });
+
+  const s2 = section("Client Revenue");
+  const c2 = card(); c2.innerHTML = `<div class="chart-wrap tall"><canvas id="chart-client-bar"></canvas></div>`;
+  s2.appendChild(c2); root.appendChild(s2);
+  const clients = D.clientPerformance(range, filters);
+  charts.clientBar = A.horizontalBarChart(document.getElementById("chart-client-bar"), clients.map((c) => c.client), clients.map((c) => c.revenue), {
+    color: "--chart-2", onClick: (evt, els) => { if (els.length) store.set({ clientId: clients[els[0].index].id }); },
+  });
+
+  const s3 = section("Top Role × Client Demand");
+  const c3 = card(); const host = document.createElement("div"); c3.appendChild(host); s3.appendChild(c3); root.appendChild(s3);
+  const combos = [];
+  D.ROLES.forEach((role) => D.CLIENTS.forEach((client) => {
+    const subs = D.queryDataset({ range, filters: Object.assign({}, filters, { roleId: role.id, clientId: client.id }), dataset: D.SUBMISSIONS });
+    if (subs.length) combos.push({ role: role.name, client: client.name, submissions: subs.length });
+  }));
+  combos.sort((a, b) => b.submissions - a.submissions);
+  A.renderTable(host, [{ key: "role", label: "Role" }, { key: "client", label: "Client" }, { key: "submissions", label: "Submissions", align: "right" }], combos.slice(0, 25));
+}
+
+const RENDERERS = { overview: renderOverview, recruiters: renderRecruiters, candidates: renderCandidates, market: renderMarket };
+
+function renderActive() {
+  destroyCharts();
+  const root = document.getElementById("tab-content");
+  root.innerHTML = "";
+  renderCompareTable();
+  A.activeFilterChips(document.getElementById("filter-chips"), store, []);
+  RENDERERS[activeTab](root);
+}
+
+store.subscribe(() => { renderChrome(); renderActive(); });
+window.addEventListener("bs-theme-change", () => renderActive());
+renderTabs();
+renderChrome();
+renderActive();
+A.wireGlobalSearch(document.getElementById("search-input"), document.getElementById("search-results"), (item) => {
+  if (item.type === "candidate") store.set({ candidateId: item.id });
+  if (item.type === "recruiter") { store.set({ recruiterId: item.id }); activeTab = "recruiters"; renderTabs(); }
+  if (item.type === "role") store.set({ roleId: item.id });
+  if (item.type === "client") { store.set({ clientId: item.id }); activeTab = "market"; renderTabs(); }
+  if (item.type === "platform") { store.set({ platformId: item.id }); activeTab = "market"; renderTabs(); }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Power Analytics — Bench Sales Analytics</title>
+<link rel="stylesheet" href="shared/style.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="layout">
+  <div class="sidebar" id="sidebar"></div>
+  <div class="main">
+  <div class="app-shell">
+  <div class="topbar">
+    <div class="topbar-row">
+      <div>
+        <h1 class="app-title">ANALYTICS</h1>
+        <div class="app-subtitle">Understand candidate, recruiter and bench-sales performance · Version 2 — Power Analytics</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button class="theme-toggle" id="theme-toggle" type="button">Theme</button>
+      </div>
+    </div>
+    <div class="global-search">
+      <span class="icon">🔍</span>
+      <input type="text" id="search-input" placeholder="Search candidate, recruiter, job, client, role..." />
+      <div class="search-results" id="search-results" hidden></div>
+    </div>
+    <div class="tabs" id="tabs"></div>
+  </div>
+
+  <div id="control-bar"></div>
+  <div class="filter-chip-row" id="filter-chips"></div>
+  <div id="compare-readout" class="compare-readout"></div>
+  <div id="tab-content"></div>
+  <div class="footer-note">Last updated Sep 12, 2026, 9:00 AM · Simulated data for UX comparison</div>
+  </div>
+  </div>
+</div>
+
+<script src="shared/data.js"></script>
+<script src="shared/app.js"></script>
+<script>
+const D = window.BenchData, A = window.App;
+const store = A.createStore({ periodKey: "this-quarter", compareMode: "previous-year" });
+A.renderSidebar(document.getElementById("sidebar"), "v2");
+A.wireThemeToggle(document.getElementById("theme-toggle"));
+let charts = {};
+
+const TABS = [
+  { id: "overview", label: "Overview" },
+  { id: "candidates", label: "Candidates" },
+  { id: "recruiters", label: "Recruiters" },
+  { id: "submissions", label: "Submissions" },
+  { id: "interviews", label: "Interviews" },
+  { id: "offers", label: "Offers" },
+  { id: "placements", label: "Placements" },
+  { id: "platforms", label: "Platforms" },
+  { id: "jobs", label: "Jobs" },
+];
+let activeTab = "overview";
+
+function destroyCharts() { Object.values(charts).forEach((c) => c && c.destroy()); charts = {}; }
+
+function renderTabs() {
+  const wrap = document.getElementById("tabs");
+  wrap.innerHTML = "";
+  TABS.forEach((t) => {
+    const el = document.createElement("div");
+    el.className = "tab" + (t.id === activeTab ? " active" : "");
+    el.textContent = t.label;
+    el.addEventListener("click", () => { activeTab = t.id; renderTabs(); renderActive(); });
+    wrap.appendChild(el);
+  });
+}
+
+function renderChrome() {
+  A.renderControlBar(document.getElementById("control-bar"), store, ["period", "compare", "granularity", "filtersBtn"]);
+  document.getElementById("open-filters-btn").textContent = "Filters";
+  document.getElementById("open-filters-btn").addEventListener("click", () => A.openFilterDrawer(store, ["recruiter", "platform", "role", "client", "location", "status"]));
+  A.activeFilterChips(document.getElementById("filter-chips"), store, []);
+}
+
+function renderCompareTable() {
+  const range = D.resolvePeriod(store.get().periodKey);
+  const cmp = D.comparePeriod(range, store.get().compareMode);
+  if (!cmp) { document.getElementById("compare-readout").innerHTML = ""; return; }
+  const filters = store.get();
+  const cur = D.computeKPIs(range, filters), prev = D.computeKPIs(cmp, filters);
+  const rows = [
+    { label: "Active Candidates", cur: cur.activeCandidates, prev: prev.activeCandidates },
+    { label: "Submissions", cur: cur.submissions, prev: prev.submissions },
+    { label: "Interviews", cur: cur.interviews, prev: prev.interviews },
+    { label: "Offers", cur: cur.offers, prev: prev.offers },
+    { label: "Placements", cur: cur.placements, prev: prev.placements },
+  ];
+  rows.__labels = ["Previous", "Current"];
+  A.renderCompareReadout(document.getElementById("compare-readout"), "Current vs. Comparison", rows);
+}
+
+function section(title, sub) {
+  const s = document.createElement("div");
+  s.className = "section";
+  if (title) s.innerHTML = `<div class="section-title">${title}</div>` + (sub ? `<div class="section-sub">${sub}</div>` : "");
+  return s;
+}
+function card() { const c = document.createElement("div"); c.className = "card"; return c; }
+function cardHeader(card, title) {
+  const h = document.createElement("div"); h.className = "card-header";
+  h.innerHTML = `<div class="card-title">${title}</div>`;
+  const menuHost = document.createElement("div");
+  h.appendChild(menuHost);
+  card.appendChild(h);
+  return menuHost;
+}
+
+function renderOverview(root) {
+  const filters = store.get();
+  const range = D.resolvePeriod(filters.periodKey);
+  const cmp = D.comparePeriod(range, filters.compareMode);
+  const cur = D.computeKPIs(range, filters);
+  const prev = cmp ? D.computeKPIs(cmp, filters) : null;
+  const pd = (a, b) => (prev ? D.pctDelta(a, b) : null);
+
+  const s1 = section();
+  const kpiHost = document.createElement("div");
+  A.renderKPIBand(kpiHost, [
+    { label: "Active Candidates", value: A.formatNumber(cur.activeCandidates), deltaPct: pd(cur.activeCandidates, prev && prev.activeCandidates) },
+    { label: "Submissions", value: A.formatNumber(cur.submissions), deltaPct: pd(cur.submissions, prev && prev.submissions) },
+    { label: "Matches", value: A.formatNumber(cur.matches), deltaPct: pd(cur.matches, prev && prev.matches) },
+    { label: "Interviews", value: A.formatNumber(cur.interviews), deltaPct: pd(cur.interviews, prev && prev.interviews) },
+    { label: "Offers", value: A.formatNumber(cur.offers), deltaPct: pd(cur.offers, prev && prev.offers) },
+    { label: "Placements", value: A.formatNumber(cur.placements), deltaPct: pd(cur.placements, prev && prev.placements) },
+    { label: "Interview Rate", value: A.formatPercent(cur.interviewRate * 100), deltaPct: prev ? (cur.interviewRate - prev.interviewRate) * 100 : null, deltaOpts: { label: "pts", suffix: "" } },
+    { label: "Placement Rate", value: A.formatPercent(cur.placementRate * 100), deltaPct: prev ? (cur.placementRate - prev.placementRate) * 100 : null, deltaOpts: { label: "pts", suffix: "" } },
+  ]);
+  s1.appendChild(kpiHost); root.appendChild(s1);
+
+  // Row 2: trend (2fr) + funnel (1fr)
+  const row2 = document.createElement("div"); row2.className = "section grid grid-2-1";
+  const trendCard = card();
+  const trendMenu = cardHeader(trendCard, "Submission / Interview Trend");
+  const trendBody = document.createElement("div"); trendBody.innerHTML = `<div class="chart-wrap tall"><canvas id="chart-trend"></canvas></div>`;
+  const trendData = document.createElement("div"); trendData.className = "inline-data-table";
+  trendCard.appendChild(trendBody); trendCard.appendChild(trendData);
+  const funnelCard = card();
+  cardHeader(funnelCard, "Funnel");
+  const funnelHost = document.createElement("div"); funnelHost.id = "funnel-host";
+  funnelCard.appendChild(funnelHost);
+  row2.appendChild(trendCard); row2.appendChild(funnelCard);
+  root.appendChild(row2);
+
+  // Row 3: platforms | roles | technologies
+  const row3 = document.createElement("div"); row3.className = "section grid grid-3";
+  const platCard = card(); const platMenu = cardHeader(platCard, "Platforms");
+  platCard.innerHTML += `<div class="chart-wrap"><canvas id="chart-platforms"></canvas></div><div class="inline-data-table" id="platforms-data"></div>`;
+  const roleCard = card(); const roleMenu = cardHeader(roleCard, "Roles");
+  roleCard.innerHTML += `<div class="chart-wrap"><canvas id="chart-roles"></canvas></div><div class="inline-data-table" id="roles-data"></div>`;
+  const techCard = card(); const techMenu = cardHeader(techCard, "Technologies");
+  techCard.innerHTML += `<div class="chart-wrap"><canvas id="chart-tech"></canvas></div><div class="inline-data-table" id="tech-data"></div>`;
+  row3.appendChild(platCard); row3.appendChild(roleCard); row3.appendChild(techCard);
+  root.appendChild(row3);
+
+  // Row 4: recruiter comparison | candidate comparison
+  const row4 = document.createElement("div"); row4.className = "section grid grid-2";
+  const recCard = card(); const recMenu = cardHeader(recCard, "Recruiter Comparison");
+  const recHost = document.createElement("div"); recCard.appendChild(recHost);
+  const candCard = card(); const candMenu = cardHeader(candCard, "Candidate Comparison");
+  const candHost = document.createElement("div"); candCard.appendChild(candHost);
+  row4.appendChild(recCard); row4.appendChild(candCard);
+  root.appendChild(row4);
+
+  // ---- populate ----
+  const series = D.seriesByGranularity(range, filters, filters.granularity);
+  charts.trend = A.lineChart(document.getElementById("chart-trend"), series.map((s) => s.label), [
+    { label: "Submissions", data: series.map((s) => s.submissions), color: "--chart-1" },
+    { label: "Interviews", data: series.map((s) => s.interviews), color: "--chart-4" },
+  ]);
+  A.renderCardMenu(trendMenu, [{ key: "label", label: "Period" }, { key: "submissions", label: "Submissions" }, { key: "interviews", label: "Interviews" }], series, { dataHost: trendData, filename: "trend" });
+
+  A.renderFunnel(funnelHost, D.funnelCounts(range, filters).map((s, i) => ({ stage: i === 3 ? "Client Response" : s.stage, value: s.value })));
+
+  const platforms = D.platformPerformance(range, filters);
+  charts.platforms = A.horizontalBarChart(document.getElementById("chart-platforms"), platforms.map((p) => p.platform), platforms.map((p) => p.submissions), {
+    color: "--chart-1", onClick: (evt, els) => { if (els.length) store.set({ platformId: platforms[els[0].index].id }); },
+  });
+  A.renderCardMenu(platMenu, [{ key: "platform", label: "Platform" }, { key: "submissions", label: "Submissions" }, { key: "interviews", label: "Interviews" }, { key: "placements", label: "Placements" }], platforms, { dataHost: document.getElementById("platforms-data"), filename: "platforms" });
+
+  const roles = D.rolePerformance(range, filters);
+  charts.roles = A.horizontalBarChart(document.getElementById("chart-roles"), roles.map((r) => r.role), roles.map((r) => r.submissions), {
+    color: "--chart-2", onClick: (evt, els) => { if (els.length) store.set({ roleId: roles[els[0].index].id }); },
+  });
+  A.renderCardMenu(roleMenu, [{ key: "role", label: "Role" }, { key: "submissions", label: "Submissions" }, { key: "interviews", label: "Interviews" }, { key: "placements", label: "Placements" }], roles, { dataHost: document.getElementById("roles-data"), filename: "roles" });
+
+  const tech = D.ROLES.map((r) => {
+    const subs = D.queryDataset({ range, filters, dataset: D.SUBMISSIONS }).filter((s) => s.roleId === r.id);
+    return { technology: r.tech, id: r.id, submissions: subs.length };
+  }).sort((a, b) => b.submissions - a.submissions);
+  charts.tech = A.horizontalBarChart(document.getElementById("chart-tech"), tech.map((t) => t.technology), tech.map((t) => t.submissions), {
+    color: "--chart-6", onClick: (evt, els) => { if (els.length) store.set({ roleId: tech[els[0].index].id }); },
+  });
+  A.renderCardMenu(techMenu, [{ key: "technology", label: "Technology" }, { key: "submissions", label: "Submissions" }], tech, { dataHost: document.getElementById("tech-data"), filename: "technologies" });
+
+  const recruiters = D.recruiterPerformance(range, filters);
+  A.renderTable(recHost, [
+    { key: "recruiter", label: "Recruiter" },
+    { key: "submissions", label: "Subm.", align: "right" },
+    { key: "interviews", label: "Int.", align: "right" },
+    { key: "placements", label: "Plc.", align: "right" },
+    { key: "placementRate", label: "Plc. %", align: "right", render: (r) => A.formatPercent(r.placementRate) },
+  ], recruiters, { onRowClick: (r) => store.set({ recruiterId: r.id }) });
+  A.renderCardMenu(recMenu, [{ key: "recruiter", label: "Recruiter" }, { key: "submissions", label: "Submissions" }, { key: "placements", label: "Placements" }, { key: "revenue", label: "Revenue", render: (r) => A.formatCurrency(r.revenue) }], recruiters, { filename: "recruiters" });
+
+  const candSubs = D.CANDIDATES.filter((c) => D.matchesFilters(c, filters)).map((c) => {
+    const subs = D.queryDataset({ range, filters: { candidateId: c.id }, dataset: D.SUBMISSIONS });
+    const plcs = D.queryDataset({ range, filters: { candidateId: c.id }, dataset: D.PLACEMENTS });
+    return { name: c.name, id: c.id, role: c.role, submissions: subs.length, placements: plcs.length };
+  }).sort((a, b) => b.submissions - a.submissions).slice(0, 8);
+  A.renderTable(candHost, [
+    { key: "name", label: "Candidate" },
+    { key: "role", label: "Role" },
+    { key: "submissions", label: "Subm.", align: "right" },
+    { key: "placements", label: "Plc.", align: "right" },
+  ], candSubs, { onRowClick: (r) => store.set({ candidateId: r.id }) });
+  A.renderCardMenu(candMenu, [{ key: "name", label: "Candidate" }, { key: "submissions", label: "Submissions" }, { key: "placements", label: "Placements" }], candSubs, { filename: "candidates" });
+}
+
+function renderSimpleTable(root, title, columns, rows, opts) {
+  const s = section(title);
+  const c = card();
+  const host = document.createElement("div");
+  c.appendChild(host);
+  s.appendChild(c);
+  root.appendChild(s);
+  A.renderTable(host, columns, rows, opts);
+}
+
+function renderCandidatesTab(root) {
+  const filters = store.get();
+  const cands = D.CANDIDATES.filter((c) => D.matchesFilters(c, filters));
+  const counts = D.candidateStatusBreakdown(filters);
+  const s1 = section();
+  const kpiHost = document.createElement("div");
+  A.renderKPIBand(kpiHost, [
+    { label: "Total", value: A.formatNumber(cands.length) },
+    { label: "Available", value: A.formatNumber(counts.get("Available") || 0) },
+    { label: "Interviewing", value: A.formatNumber(counts.get("Interviewing") || 0) },
+    { label: "Placed", value: A.formatNumber(counts.get("Placed") || 0) },
+    { label: "At Risk", value: A.formatNumber(counts.get("At Risk") || 0) },
+    { label: "Inactive", value: A.formatNumber(counts.get("Inactive") || 0) },
+  ]);
+  s1.appendChild(kpiHost); root.appendChild(s1);
+  renderSimpleTable(root, "All Candidates", [
+    { key: "name", label: "Candidate" },
+    { key: "role", label: "Role" },
+    { key: "location", label: "Location" },
+    { key: "status", label: "Status", render: (r) => `<span class="badge badge-${r.status.toLowerCase().replace(/\s/g, "")}">${r.status}</span>` },
+    { key: "benchDays", label: "Bench Days", align: "right" },
+  ], cands.sort((a, b) => b.benchDays - a.benchDays).slice(0, 40), { onRowClick: (r) => store.set({ candidateId: r.id }) });
+}
+
+function renderRecruitersTab(root) {
+  const filters = store.get();
+  const range = D.resolvePeriod(filters.periodKey);
+  const recruiters = D.recruiterPerformance(range, filters);
+  renderSimpleTable(root, "Recruiter Performance", [
+    { key: "recruiter", label: "Recruiter" },
+    { key: "candidates", label: "Candidates", align: "right" },
+    { key: "submissions", label: "Submissions", align: "right" },
+    { key: "interviews", label: "Interviews", align: "right" },
+    { key: "offers", label: "Offers", align: "right" },
+    { key: "placements", label: "Placements", align: "right" },
+    { key: "placementRate", label: "Placement %", align: "right", render: (r) => A.formatPercent(r.placementRate) },
+    { key: "revenue", label: "Revenue", align: "right", render: (r) => A.formatCurrency(r.revenue) },
+  ], recruiters, { onRowClick: (r) => store.set({ recruiterId: r.id }) });
+}
+
+function renderSubmissionsTab(root) {
+  const filters = store.get();
+  const range = D.resolvePeriod(filters.periodKey);
+  const s1 = section("Submission Volume");
+  const c1 = card(); c1.innerHTML = `<div class="chart-wrap tall"><canvas id="chart-sub-trend"></canvas></div>`;
+  s1.appendChild(c1); root.appendChild(s1);
+  const series = D.seriesByGranularity(range, filters, filters.granularity);
+  charts.subTrend = A.barChart(document.getElementById("chart-sub-trend"), series.map((s) => s.label), [{ label: "Submissions", data: series.map((s) => s.submissions), color: "--chart-1" }]);
+  renderSimpleTable(root, "By Platform", [
+    { key: "platform", label: "Platform" }, { key: "submissions", label: "Submissions", align: "right" },
+    { key: "responses", label: "Responses", align: "right" }, { key: "interviewPct", label: "Interview %", align: "right", render: (r) => A.formatPercent(r.interviewPct) },
+  ], D.platformPerformance(range, filters), { onRowClick: (r) => store.set({ platformId: r.id }) });
+}
+
+function renderInterviewsTab(root) {
+  const filters = store.get();
+  const range = D.resolvePeriod(filters.periodKey);
+  const ints = D.queryDataset({ range, filters, dataset: D.INTERVIEWS });
+  const outcomeCounts = new Map();
+  ints.forEach((i) => outcomeCounts.set(i.outcome, (outcomeCounts.get(i.outcome) || 0) + 1));
+  const s1 = section();
+  const kpiHost = document.createElement("div");
+  A.renderKPIBand(kpiHost, ["Completed", "Passed", "Failed", "Cancelled", "NoShow"].map((o) => ({ label: o === "NoShow" ? "No-show" : o, value: A.formatNumber(outcomeCounts.get(o) || 0) })));
+  s1.appendChild(kpiHost); root.appendChild(s1);
+  renderSimpleTable(root, "Interviews", [
+    { key: "candidate", label: "Candidate", render: (r) => D.candidateById[r.candidateId].name },
+    { key: "recruiter", label: "Recruiter", render: (r) => D.RECRUITERS.find((x) => x.id === r.recruiterId).name },
+    { key: "round", label: "Round", align: "right" },
+    { key: "outcome", label: "Outcome" },
+    { key: "date", label: "Date", render: (r) => A.formatDate(r.date) },
+  ], ints.slice(0, 40));
+}
+
+function renderOffersTab(root) {
+  const filters = store.get();
+  const range = D.resolvePeriod(filters.periodKey);
+  const offs = D.queryDataset({ range, filters, dataset: D.OFFERS });
+  const accepted = offs.filter((o) => o.status === "Accepted").length;
+  const s1 = section();
+  const kpiHost = document.createElement("div");
+  A.renderKPIBand(kpiHost, [
+    { label: "Total Offers", value: A.formatNumber(offs.length) },
+    { label: "Accepted", value: A.formatNumber(accepted) },
+    { label: "Rejected", value: A.formatNumber(offs.length - accepted) },
+    { label: "Acceptance Rate", value: A.formatPercent(offs.length ? (accepted / offs.length) * 100 : 0) },
+  ]);
+  s1.appendChild(kpiHost); root.appendChild(s1);
+  renderSimpleTable(root, "Offers", [
+    { key: "candidate", label: "Candidate", render: (r) => D.candidateById[r.candidateId].name },
+    { key: "client", label: "Client", render: (r) => D.CLIENTS.find((c) => c.id === r.clientId).name },
+    { key: "status", label: "Status" },
+    { key: "date", label: "Date", render: (r) => A.formatDate(r.date) },
+  ], offs.slice(0, 40));
+}
+
+function renderPlacementsTab(root) {
+  const filters = store.get();
+  const range = D.resolvePeriod(filters.periodKey);
+  const plcs = D.queryDataset({ range, filters, dataset: D.PLACEMENTS });
+  const revenue = plcs.reduce((s, p) => s + p.value, 0);
+  const s1 = section();
+  const kpiHost = document.createElement("div");
+  A.renderKPIBand(kpiHost, [
+    { label: "Placements", value: A.formatNumber(plcs.length) },
+    { label: "Revenue", value: A.formatCurrency(revenue) },
+    { label: "Avg. Value", value: A.formatCurrency(plcs.length ? revenue / plcs.length : 0) },
+  ]);
+  s1.appendChild(kpiHost); root.appendChild(s1);
+  renderSimpleTable(root, "Placements", [
+    { key: "candidate", label: "Candidate", render: (r) => D.candidateById[r.candidateId].name },
+    { key: "client", label: "Client", render: (r) => D.CLIENTS.find((c) => c.id === r.clientId).name },
+    { key: "value", label: "Value", align: "right", render: (r) => A.formatCurrency(r.value) },
+    { key: "date", label: "Date", render: (r) => A.formatDate(r.date) },
+  ], plcs.sort((a, b) => b.date - a.date).slice(0, 40));
+}
+
+function renderPlatformsTab(root) {
+  const filters = store.get();
+  const range = D.resolvePeriod(filters.periodKey);
+  const platforms = D.platformPerformance(range, filters);
+  const s1 = section("Platform Performance");
+  const c1 = card(); c1.innerHTML = `<div class="chart-wrap"><canvas id="chart-plat-tab"></canvas></div>`;
+  s1.appendChild(c1); root.appendChild(s1);
+  charts.platTab = A.horizontalBarChart(document.getElementById("chart-plat-tab"), platforms.map((p) => p.platform), platforms.map((p) => p.submissions), { color: "--chart-1" });
+  renderSimpleTable(root, "Detail", [
+    { key: "platform", label: "Platform" }, { key: "submissions", label: "Submissions", align: "right" },
+    { key: "responses", label: "Responses", align: "right" }, { key: "interviews", label: "Interviews", align: "right" },
+    { key: "placements", label: "Placements", align: "right" }, { key: "interviewPct", label: "Interview %", align: "right", render: (r) => A.formatPercent(r.interviewPct) },
+  ], platforms, { onRowClick: (r) => store.set({ platformId: r.id }) });
+}
+
+function renderJobsTab(root) {
+  const filters = store.get();
+  const range = D.resolvePeriod(filters.periodKey);
+  const combos = [];
+  D.ROLES.forEach((role) => {
+    D.CLIENTS.forEach((client) => {
+      const subs = D.queryDataset({ range, filters: Object.assign({}, filters, { roleId: role.id, clientId: client.id }), dataset: D.SUBMISSIONS });
+      if (subs.length) combos.push({ role: role.name, client: client.name, submissions: subs.length });
+    });
+  });
+  combos.sort((a, b) => b.submissions - a.submissions);
+  renderSimpleTable(root, "Top Role × Client Demand", [
+    { key: "role", label: "Role" }, { key: "client", label: "Client" }, { key: "submissions", label: "Submissions", align: "right" },
+  ], combos.slice(0, 30));
+}
+
+const RENDERERS = {
+  overview: renderOverview, candidates: renderCandidatesTab, recruiters: renderRecruitersTab,
+  submissions: renderSubmissionsTab, interviews: renderInterviewsTab, offers: renderOffersTab,
+  placements: renderPlacementsTab, platforms: renderPlatformsTab, jobs: renderJobsTab,
+};
+
+function renderActive() {
+  destroyCharts();
+  const root = document.getElementById("tab-content");
+  root.innerHTML = "";
+  renderCompareTable();
+  A.activeFilterChips(document.getElementById("filter-chips"), store, []);
+  RENDERERS[activeTab](root);
+}
+
+store.subscribe(() => { renderChrome(); renderActive(); });
+window.addEventListener("bs-theme-change", () => renderActive());
+renderTabs();
+renderChrome();
+renderActive();
+A.wireGlobalSearch(document.getElementById("search-input"), document.getElementById("search-results"), (item) => {
+  if (item.type === "candidate") { store.set({ candidateId: item.id }); activeTab = "candidates"; renderTabs(); }
+  if (item.type === "recruiter") { store.set({ recruiterId: item.id }); activeTab = "recruiters"; renderTabs(); }
+  if (item.type === "role") { store.set({ roleId: item.id }); }
+  if (item.type === "client") { store.set({ clientId: item.id }); }
+  if (item.type === "platform") { store.set({ platformId: item.id }); activeTab = "platforms"; renderTabs(); }
+});
+</script>
+</body>
+</html>

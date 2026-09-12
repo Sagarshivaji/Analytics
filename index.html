@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Bench Sales Analytics — Prototype Explorer</title>
+<link rel="stylesheet" href="shared/style.css" />
+<style>
+  body { background: var(--bg); }
+  .hero { padding: 40px 0 8px; }
+  .hero h1 { font-size: 24px; margin: 0 0 6px; }
+  .hero p { color: var(--text-secondary); font-size: 13.5px; max-width: 720px; margin: 0; }
+  .legend { display:flex; gap:18px; margin-top:22px; font-size:12px; color:var(--text-tertiary); flex-wrap:wrap; }
+  .legend b { color: var(--text); }
+  .note-box { margin-top: 28px; border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; background: var(--surface); font-size: 12.5px; color: var(--text-secondary); }
+  .note-box b { color: var(--text); }
+  .featured-card { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius); padding: 20px; margin-top: 20px; text-decoration: none; color: var(--text); display: block; }
+  .featured-card:hover { border-color: var(--accent); }
+  .featured-num { font-size: 11px; color: var(--accent); font-weight: 700; letter-spacing: 0.5px; }
+  .featured-name { font-size: 17px; font-weight: 700; margin: 6px 0 6px; }
+  .featured-desc { font-size: 12.5px; color: var(--text-secondary); max-width: 760px; }
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <div class="hero">
+    <h1>Bench Sales Analytics — 6 UX Prototypes</h1>
+    <p>Same underlying dataset (165 candidates, 6 recruiters, 5 platforms, 8 roles, 10 clients, 24 months of submissions/interviews/offers/placements) rendered through six different analytics UX philosophies. Open each one, apply the same filters, and compare which structure surfaces answers fastest.</p>
+    <div class="legend">
+      <span><b>Today (simulated):</b> Sep 12, 2026</span>
+      <span><b>History:</b> Sep 2024 – Sep 2026</span>
+      <span><b>Data:</b> shared/data.js (seeded, deterministic)</span>
+    </div>
+  </div>
+
+  <a class="featured-card" href="best-of-all.html">
+    <div class="featured-num">★ UNIFIED — RECOMMENDED PRODUCT DIRECTION</div>
+    <div class="featured-name">Best of All</div>
+    <div class="featured-desc">Combines the strongest pattern from each prototype into one product: Executive KPI hierarchy (01) + power filtering &amp; drill-down (02) + CRM pipeline with rate confirmation (03) + deep candidate intelligence &amp; individual profiles (04) + a needs-attention workflow (05) + the business/revenue layer (06). Every chart is clickable and cross-filters the whole dashboard.</div>
+  </a>
+
+  <div class="proto-grid">
+    <a class="proto-card" href="v1-executive-intelligence.html">
+      <div class="proto-num">01 — EXECUTIVE INTELLIGENCE</div>
+      <div class="proto-name">Executive Intelligence</div>
+      <div class="proto-desc">Senior-management view: 8-metric KPI band, operating trend, candidate funnel, health mix, platform &amp; role leaderboards, recruiter scatter, narrative insights.</div>
+      <div class="proto-q">"How is the entire bench-sales operation performing?"</div>
+    </a>
+    <a class="proto-card" href="v2-power-analytics.html">
+      <div class="proto-num">02 — POWER ANALYTICS</div>
+      <div class="proto-name">Power Analytics</div>
+      <div class="proto-desc">BI-style exploration: dense grid, right-side multi-select filter drawer, click-to-drill-down on any chart, per-chart menus (view data / compare / export).</div>
+      <div class="proto-q">"Let me investigate the data myself."</div>
+    </a>
+    <a class="proto-card" href="v3-sales-pipeline.html">
+      <div class="proto-num">03 — SALES PIPELINE / CRM</div>
+      <div class="proto-name">Sales Pipeline</div>
+      <div class="proto-desc">CRM-style horizontal pipeline with stage-to-stage conversion, bench-aging distribution, and a live candidate pipeline table sorted by days-in-stage.</div>
+      <div class="proto-q">"Where is every candidate in the sales process?"</div>
+    </a>
+    <a class="proto-card" href="v4-candidate-intelligence.html">
+      <div class="proto-num">04 — CANDIDATE INTELLIGENCE</div>
+      <div class="proto-name">Candidate Intelligence</div>
+      <div class="proto-desc">Deepest candidate focus: leaderboard, performance quadrant, activity heatmap, and a full individual-candidate profile with 8 dedicated charts.</div>
+      <div class="proto-q">"Which candidates are working, and which need help?"</div>
+    </a>
+    <a class="proto-card" href="v5-operations-control.html">
+      <div class="proto-num">05 — OPERATIONS CONTROL CENTER</div>
+      <div class="proto-name">Operations Control Center</div>
+      <div class="proto-desc">Action-first: attention summary tiles, activity velocity, a "needs attention" worklist ranked by signal, and recruiter workload balance.</div>
+      <div class="proto-q">"What needs my attention right now?"</div>
+    </a>
+    <a class="proto-card" href="v6-strategic-business.html">
+      <div class="proto-num">06 — STRATEGIC BUSINESS</div>
+      <div class="proto-name">Strategic Business Analytics</div>
+      <div class="proto-desc">Revenue-first view: pipeline value, forecast funnel, revenue by technology/recruiter/candidate, and revenue-vs-submissions efficiency scatter.</div>
+      <div class="proto-q">"What is driving revenue and placements?"</div>
+    </a>
+    <a class="proto-card" href="v7-visual-analytics.html">
+      <div class="proto-num">07 — VISUAL ANALYTICS</div>
+      <div class="proto-name">Visual Analytics</div>
+      <div class="proto-desc">Chart-form-matches-data-shape: sparkline KPI tiles, a stacked-area volume trend, donut/pie composition charts, a polar-area role breakdown, and a radar comparing recruiters across five dimensions at once.</div>
+      <div class="proto-q">"What does this data actually look like, chart by chart?"</div>
+    </a>
+    <a class="proto-card" href="v8-simplified.html">
+      <div class="proto-num">08 — SIMPLIFIED ANALYTICS</div>
+      <div class="proto-name">Simplified Analytics</div>
+      <div class="proto-desc">Built for ease over completeness: just 4 tabs, a 2-control top bar (everything else lives in one Filters drawer), an attention strip before any chart, and a candidate slide-over panel so drilling into a person never loses your place in the page.</div>
+      <div class="proto-q">"Just tell me what I need to know, quickly."</div>
+    </a>
+  </div>
+
+  <div class="note-box">
+    <b>How to compare fairly:</b> every prototype exposes Period, Compare, Granularity, Recruiter, Candidate, Platform, Role and Client controls reading from the same <code>shared/data.js</code> dataset. Set the same filters in two prototypes to see how differently each surfaces the same underlying answer.
+  </div>
+</div>
+</body>
+</html>

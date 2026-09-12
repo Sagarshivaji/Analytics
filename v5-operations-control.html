@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Operations Control Center — Bench Sales Analytics</title>
+<link rel="stylesheet" href="shared/style.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="layout">
+  <div class="sidebar" id="sidebar"></div>
+  <div class="main">
+  <div class="app-shell">
+  <div class="topbar">
+    <div class="topbar-row">
+      <div>
+        <h1 class="app-title">ANALYTICS</h1>
+        <div class="app-subtitle">Understand candidate, recruiter and bench-sales performance · Version 5 — Operations Control Center</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button class="theme-toggle" id="theme-toggle" type="button">Theme</button>
+      </div>
+    </div>
+    <div class="global-search">
+      <span class="icon">🔍</span>
+      <input type="text" id="search-input" placeholder="Search candidate, recruiter, job, client, role..." />
+      <div class="search-results" id="search-results" hidden></div>
+    </div>
+  </div>
+
+  <div id="control-bar"></div>
+  <div class="filter-chip-row" id="filter-chips"></div>
+  <div id="tab-content"></div>
+  <div class="footer-note">Last updated Sep 12, 2026, 9:00 AM · Simulated data for UX comparison</div>
+  </div>
+  </div>
+</div>
+
+<script src="shared/data.js"></script>
+<script src="shared/app.js"></script>
+<script>
+const D = window.BenchData, A = window.App;
+const store = A.createStore({ periodKey: "this-week", compareMode: "previous-period" });
+A.renderSidebar(document.getElementById("sidebar"), "v5");
+A.wireThemeToggle(document.getElementById("theme-toggle"));
+let charts = {};
+
+const QUICK_RANGES = [["today", "Today"], ["this-week", "Week"], ["this-month", "Month"], ["this-quarter", "Quarter"], ["this-year", "Year"]];
+
+function destroyCharts() { Object.values(charts).forEach((c) => c && c.destroy()); charts = {}; }
+
+function renderChrome() {
+  const bar = document.getElementById("control-bar");
+  bar.innerHTML = "";
+  const wrap = A.el("div", { class: "control-bar" });
+  const pills = A.el("div", { class: "pill-toggle" });
+  QUICK_RANGES.forEach(([key, label]) => {
+    const btn = A.el("button", {}, label);
+    if (store.get().periodKey === key) btn.classList.add("active");
+    btn.addEventListener("click", () => store.set({ periodKey: key }));
+    pills.appendChild(btn);
+  });
+  wrap.appendChild(pills);
+
+  const s = store.get();
+  function selectControl(label, id, options, value, onChange) {
+    const c = A.el("div", { class: "control" });
+    c.appendChild(A.el("label", {}, label));
+    const sel = document.createElement("select");
+    options.forEach((o) => { const opt = document.createElement("option"); opt.value = o.value; opt.textContent = o.label; if (o.value === value) opt.selected = true; sel.appendChild(opt); });
+    sel.addEventListener("change", (e) => onChange(e.target.value));
+    c.appendChild(sel);
+    return c;
+  }
+  wrap.appendChild(selectControl("Recruiter", "ctl-recruiter", [{ value: "all", label: "All Recruiters" }].concat(D.RECRUITERS.map((r) => ({ value: r.id, label: r.name }))), s.recruiterId, (v) => store.set({ recruiterId: v })));
+  wrap.appendChild(selectControl("Candidate", "ctl-candidate", [{ value: "all", label: "All Candidates" }].concat(D.CANDIDATES.map((c) => ({ value: c.id, label: c.name }))), s.candidateId, (v) => store.set({ candidateId: v })));
+  wrap.appendChild(selectControl("Platform", "ctl-platform", [{ value: "all", label: "All Platforms" }].concat(D.PLATFORMS.map((p) => ({ value: p.id, label: p.name }))), s.platformId, (v) => store.set({ platformId: v })));
+  wrap.appendChild(selectControl("Status", "ctl-status", [{ value: "all", label: "All Statuses" }].concat(["Available", "Submitted", "Interviewing", "Offered", "At Risk", "Inactive"].map((v) => ({ value: v, label: v }))), s.status, (v) => store.set({ status: v })));
+  bar.appendChild(wrap);
+  A.activeFilterChips(document.getElementById("filter-chips"), store, []);
+}
+
+function section(title, sub) {
+  const s = document.createElement("div"); s.className = "section";
+  if (title) s.innerHTML = `<div class="section-title">${title}</div>` + (sub ? `<div class="section-sub">${sub}</div>` : "");
+  return s;
+}
+function card() { const c = document.createElement("div"); c.className = "card"; return c; }
+
+function computeSignals(filters) {
+  const cands = D.CANDIDATES.filter((c) => D.matchesFilters(c, filters) && c.status !== "Placed" && c.status !== "Inactive");
+  const signals = [];
+  cands.forEach((c) => {
+    if (c.idleDays >= 7) signals.push({ candidate: c, signal: `No submission ${c.idleDays}d`, severity: c.idleDays >= 30 ? "critical" : "warning", lastActivity: c.lastActivity });
+  });
+  const todayInterviews = D.INTERVIEWS.filter((i) => i.outcome === "Scheduled" && D.matchesFilters(i, filters));
+  todayInterviews.forEach((i) => {
+    const c = D.candidateById[i.candidateId];
+    signals.push({ candidate: c, signal: `Interview ${i.date.getTime() === D.TODAY.getTime() ? "today" : "pending"}`, severity: "info", lastActivity: i.date });
+  });
+  return signals;
+}
+
+function renderOverview(root) {
+  const filters = store.get();
+  const range = D.resolvePeriod(filters.periodKey);
+
+  const cands = D.CANDIDATES.filter((c) => D.matchesFilters(c, filters));
+  const needsAction = cands.filter((c) => c.status !== "Placed" && c.status !== "Inactive" && c.idleDays >= 7).length;
+  const awaitingResponse = D.SUBMISSIONS.filter((s) => D.matchesFilters(s, filters) && s.stageIndex === 0 && !s.terminal && Math.round((D.TODAY - s.date) / 86400000) <= 21).length;
+  const interviewsToday = D.INTERVIEWS.filter((i) => D.matchesFilters(i, filters) && i.outcome === "Scheduled" && i.date.getTime() === D.TODAY.getTime()).length;
+  const decliningCount = (() => {
+    const cmp = D.comparePeriod(range, "previous-period");
+    let n = 0;
+    cands.forEach((c) => {
+      const cur = D.INTERVIEWS.filter((i) => i.candidateId === c.id && D.inRange(i.date, range)).length;
+      const prev = D.INTERVIEWS.filter((i) => i.candidateId === c.id && D.inRange(i.date, cmp)).length;
+      if (prev >= 2 && cur === 0) n++;
+    });
+    return n;
+  })();
+  const inactive7 = cands.filter((c) => c.idleDays >= 7 && c.status !== "Placed").length;
+
+  const s1 = section("Attention Summary");
+  const band = A.el("div", { class: "alert-band" });
+  const alerts = [
+    { count: needsAction, label: "Candidates requiring action", cls: "critical" },
+    { count: awaitingResponse, label: "Submissions awaiting response", cls: "" },
+    { count: interviewsToday, label: "Interviews today", cls: "info" },
+    { count: decliningCount, label: "Candidates with declining conversion", cls: "" },
+    { count: inactive7, label: "Inactive for 7+ days", cls: "critical" },
+  ];
+  alerts.forEach((a) => {
+    const c = A.el("div", { class: "alert-card " + a.cls });
+    c.innerHTML = `<div class="alert-count">${A.formatNumber(a.count)}</div><div class="alert-label">${a.label}</div>`;
+    band.appendChild(c);
+  });
+  s1.appendChild(band); root.appendChild(s1);
+
+  const s2 = document.createElement("div"); s2.className = "section grid grid-2";
+  const trendCard = card(); trendCard.innerHTML = `<div class="card-header"><div class="card-title">Performance Trend</div></div><div class="chart-wrap"><canvas id="chart-trend"></canvas></div>`;
+  const velCard = card(); velCard.innerHTML = `<div class="card-header"><div class="card-title">Activity Velocity</div></div><div class="chart-wrap"><canvas id="chart-velocity"></canvas></div>`;
+  s2.appendChild(trendCard); s2.appendChild(velCard); root.appendChild(s2);
+
+  const wideRange = [new Date(D.TODAY.getFullYear(), D.TODAY.getMonth() - 5, 1), D.TODAY];
+  const series = D.monthlySeries(wideRange, filters);
+  charts.trend = A.lineChart(document.getElementById("chart-trend"), series.map((s) => s.label), [
+    { label: "Placements", data: series.map((s) => s.placements), color: "--chart-2" },
+    { label: "Offers", data: series.map((s) => s.offers), color: "--chart-3" },
+  ]);
+  charts.velocity = A.lineChart(document.getElementById("chart-velocity"), series.map((s) => s.label), [
+    { label: "Submissions", data: series.map((s) => s.submissions), color: "--chart-1" },
+    { label: "Responses", data: series.map((s) => Math.round(s.submissions * 0.36)), color: "--chart-6" },
+    { label: "Interviews", data: series.map((s) => s.interviews), color: "--chart-4" },
+  ]);
+
+  const s3 = section("Needs Attention");
+  const c3 = card(); const host = document.createElement("div"); c3.appendChild(host);
+  s3.appendChild(c3); root.appendChild(s3);
+  const signals = computeSignals(filters).sort((a, b) => b.lastActivity - a.lastActivity).slice(0, 25);
+  A.renderTable(host, [
+    { key: "candidate", label: "Candidate", render: (r) => r.candidate.name },
+    { key: "signal", label: "Signal", render: (r) => `<span class="badge badge-${r.severity === "critical" ? "offered" : r.severity === "info" ? "interviewing" : "atrisk"}">${r.signal}</span>` },
+    { key: "lastActivity", label: "Last Activity", render: (r) => A.formatDate(r.lastActivity) },
+    { key: "owner", label: "Owner", render: (r) => D.RECRUITERS.find((x) => x.id === r.candidate.recruiterId).name },
+  ], signals, { onRowClick: (r) => store.set({ candidateId: r.candidate.id }) });
+
+  const s4 = section("Recruiter Workload");
+  const c4 = card(); c4.innerHTML = `<div class="chart-wrap tall"><canvas id="chart-workload"></canvas></div>`;
+  s4.appendChild(c4); root.appendChild(s4);
+  const recruiters = D.recruiterPerformance(range, filters);
+  charts.workload = A.barChart(document.getElementById("chart-workload"), recruiters.map((r) => r.recruiter), [
+    { label: "Active Candidates", data: recruiters.map((r) => r.candidates), color: "--chart-1" },
+    { label: "Submissions", data: recruiters.map((r) => r.submissions), color: "--chart-6" },
+    { label: "Interviews", data: recruiters.map((r) => r.interviews), color: "--chart-4" },
+  ], { stacked: false });
+}
+
+function renderActive() {
+  destroyCharts();
+  const root = document.getElementById("tab-content");
+  root.innerHTML = "";
+  renderOverview(root);
+}
+
+store.subscribe(() => { renderChrome(); renderActive(); });
+window.addEventListener("bs-theme-change", () => renderActive());
+renderChrome();
+renderActive();
+A.wireGlobalSearch(document.getElementById("search-input"), document.getElementById("search-results"), (item) => {
+  if (item.type === "candidate") store.set({ candidateId: item.id });
+  if (item.type === "recruiter") store.set({ recruiterId: item.id });
+  if (item.type === "platform") store.set({ platformId: item.id });
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Candidate Intelligence — Bench Sales Analytics</title>
+<link rel="stylesheet" href="shared/style.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js"></script>
+<style>
+  .cand-picker { display: grid; grid-template-columns: 220px 1fr; gap: 16px; }
+  @media (max-width: 900px) { .cand-picker { grid-template-columns: 1fr; } }
+  .cand-list { border-right: 1px solid var(--border); padding-right: 12px; max-height: 640px; overflow-y: auto; }
+  .cand-list-group { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-tertiary); margin: 12px 0 4px; }
+  .cand-list-item { padding: 6px 8px; border-radius: var(--radius); font-size: 12.5px; cursor: pointer; display: flex; justify-content: space-between; }
+  .cand-list-item:hover { background: var(--surface-alt); }
+  .cand-list-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .heatmap-table { border-collapse: collapse; font-size: 10.5px; }
+  .heatmap-table td, .heatmap-table th { padding: 2px; text-align: center; }
+  .heatmap-cell { width: 20px; height: 18px; border-radius: 2px; }
+  .heatmap-name { font-size: 11.5px; text-align: left; padding-right: 8px; white-space: nowrap; color: var(--text-secondary); }
+  .profile-header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 4px; }
+  .profile-name { font-size: 18px; font-weight: 700; }
+  .profile-role { color: var(--text-secondary); font-size: 12.5px; }
+  .profile-meta { display: flex; gap: 18px; font-size: 12px; color: var(--text-tertiary); margin-top: 6px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="sidebar" id="sidebar"></div>
+  <div class="main">
+  <div class="app-shell">
+  <div class="topbar">
+    <div class="topbar-row">
+      <div>
+        <h1 class="app-title">ANALYTICS</h1>
+        <div class="app-subtitle">Understand candidate, recruiter and bench-sales performance · Version 4 — Candidate Intelligence</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button class="theme-toggle" id="theme-toggle" type="button">Theme</button>
+      </div>
+    </div>
+    <div class="global-search">
+      <span class="icon">🔍</span>
+      <input type="text" id="search-input" placeholder="Search candidate, recruiter, job, client, role..." />
+      <div class="search-results" id="search-results" hidden></div>
+    </div>
+    <div class="tabs" id="tabs"></div>
+  </div>
+
+  <div id="control-bar"></div>
+  <div class="filter-chip-row" id="filter-chips"></div>
+  <div id="tab-content"></div>
+  <div class="footer-note">Last updated Sep 12, 2026, 9:00 AM · Simulated data for UX comparison</div>
+  </div>
+  </div>
+</div>
+
+<script src="shared/data.js"></script>
+<script src="shared/app.js"></script>
+<script>
+const D = window.BenchData, A = window.App;
+const store = A.createStore({ periodKey: "this-quarter", compareMode: "previous-year" });
+A.renderSidebar(document.getElementById("sidebar"), "v4");
+A.wireThemeToggle(document.getElementById("theme-toggle"));
+let charts = {};
+let selectedCandidateId = null;
+let compareIds = [null, null];
+
+const TABS = [
+  { id: "candidates", label: "Candidates" },
+  { id: "top", label: "Top Performers" },
+  { id: "risk", label: "At Risk" },
+  { id: "compare", label: "Comparison" },
+  { id: "individual", label: "Individual" },
+];
+let activeTab = "candidates";
+
+function destroyCharts() { Object.values(charts).forEach((c) => c && c.destroy()); charts = {}; }
+function renderTabs() {
+  const wrap = document.getElementById("tabs");
+  wrap.innerHTML = "";
+  TABS.forEach((t) => {
+    const el = document.createElement("div");
+    el.className = "tab" + (t.id === activeTab ? " active" : "");
+    el.textContent = t.label;
+    el.addEventListener("click", () => { activeTab = t.id; renderTabs(); renderActive(); });
+    wrap.appendChild(el);
+  });
+}
+function renderChrome() {
+  A.renderControlBar(document.getElementById("control-bar"), store, ["period", "compare", "recruiter", "platform", "filtersBtn"]);
+  document.getElementById("open-filters-btn").addEventListener("click", () => A.openFilterDrawer(store, ["role", "client", "location", "status"]));
+  A.activeFilterChips(document.getElementById("filter-chips"), store, []);
+}
+function section(title, sub) {
+  const s = document.createElement("div"); s.className = "section";
+  if (title) s.innerHTML = `<div class="section-title">${title}</div>` + (sub ? `<div class="section-sub">${sub}</div>` : "");
+  return s;
+}
+function card() { const c = document.createElement("div"); c.className = "card"; return c; }
+
+function candidateMetrics(c, filters) {
+  const range = D.resolvePeriod(store.get().periodKey);
+  const subs = D.queryDataset({ range, filters: { candidateId: c.id }, dataset: D.SUBMISSIONS });
+  const ints = D.queryDataset({ range, filters: { candidateId: c.id }, dataset: D.INTERVIEWS });
+  const offs = D.queryDataset({ range, filters: { candidateId: c.id }, dataset: D.OFFERS });
+  const plcs = D.queryDataset({ range, filters: { candidateId: c.id }, dataset: D.PLACEMENTS });
+  return {
+    submissions: subs.length, interviews: ints.length, offers: offs.length, placements: plcs.length,
+    interviewRate: subs.length ? (ints.length / subs.length) * 100 : 0,
+    offerRate: ints.length ? (offs.length / ints.length) * 100 : 0,
+    placementRate: subs.length ? (plcs.length / subs.length) * 100 : 0,
+  };
+}
+
+function renderCandidatesTab(root) {
+  const filters = store.get();
+  const cands = D.CANDIDATES.filter((c) => D.matchesFilters(c, filters));
+  const counts = D.candidateStatusBreakdown(filters);
+  const s1 = section();
+  const kpiHost = document.createElement("div");
+  A.renderKPIBand(kpiHost, [
+    { label: "Total", value: A.formatNumber(cands.length) },
+    { label: "Active", value: A.formatNumber(cands.length - (counts.get("Placed") || 0) - (counts.get("Inactive") || 0)) },
+    { label: "Interviewing", value: A.formatNumber(counts.get("Interviewing") || 0) },
+    { label: "Offered", value: A.formatNumber(counts.get("Offered") || 0) },
+    { label: "Placed", value: A.formatNumber(counts.get("Placed") || 0) },
+    { label: "At Risk", value: A.formatNumber(counts.get("At Risk") || 0) },
+  ]);
+  s1.appendChild(kpiHost); root.appendChild(s1);
+
+  const s2 = section("Candidate Performance Matrix", "Submissions (x) vs. interview conversion (y) — bubble size = placements. Top-right = top performers, bottom-left = at risk.");
+  const c2 = card(); c2.innerHTML = `<div class="chart-wrap tall"><canvas id="chart-matrix"></canvas></div>`;
+  s2.appendChild(c2); root.appendChild(s2);
+  const points = cands.map((c) => {
+    const m = candidateMetrics(c, filters);
+    return { x: m.submissions, y: +m.interviewRate.toFixed(1), r: Math.max(3, Math.min(18, m.placements * 5 + 3)), name: c.name };
+  });
+  charts.matrix = A.scatterChart(document.getElementById("chart-matrix"), points, { xLabel: "Submissions", yLabel: "Interview Rate (%)", color: "--chart-4", tooltip: (raw) => `${raw.x} submissions, ${raw.y}% interview rate` });
+
+  const s3 = section("Candidate Activity Heatmap", "Submissions per week — last 12 weeks, top 15 candidates by volume");
+  const c3 = card(); const heatHost = document.createElement("div"); heatHost.style.overflowX = "auto"; c3.appendChild(heatHost);
+  s3.appendChild(c3); root.appendChild(s3);
+  renderHeatmap(heatHost, cands);
+
+  const s4 = section("Candidate Leaderboard");
+  const c4 = card(); const lbHost = document.createElement("div"); c4.appendChild(lbHost);
+  s4.appendChild(c4); root.appendChild(s4);
+  const leaderboard = cands.map((c) => Object.assign({ name: c.name, id: c.id, role: c.role }, candidateMetrics(c, filters))).sort((a, b) => b.submissions - a.submissions).slice(0, 20);
+  A.renderTable(lbHost, [
+    { key: "name", label: "Candidate" }, { key: "role", label: "Role" },
+    { key: "submissions", label: "Submissions", align: "right" }, { key: "interviews", label: "Interviews", align: "right" },
+    { key: "offers", label: "Offers", align: "right" }, { key: "placements", label: "Placements", align: "right" },
+  ], leaderboard, { onRowClick: (r) => { selectedCandidateId = r.id; activeTab = "individual"; renderTabs(); renderActive(); } });
+}
+
+function renderHeatmap(host, cands) {
+  const weeks = 12;
+  const top = [...cands].map((c) => ({ c, subs: D.SUBMISSIONS.filter((s) => s.candidateId === c.id).length })).sort((a, b) => b.subs - a.subs).slice(0, 15);
+  const table = document.createElement("table"); table.className = "heatmap-table";
+  const thead = document.createElement("tr"); thead.appendChild(document.createElement("th"));
+  const weekStarts = [];
+  for (let i = weeks - 1; i >= 0; i--) { const d = D.addDays ? D.addDays(D.TODAY, -i * 7) : new Date(D.TODAY - i * 7 * 86400000); weekStarts.push(new Date(D.TODAY.getFullYear(), D.TODAY.getMonth(), D.TODAY.getDate() - i * 7)); }
+  weekStarts.forEach((w) => { const th = document.createElement("th"); th.textContent = w.toLocaleDateString("en-US", { month: "numeric", day: "numeric" }); th.style.fontSize = "9.5px"; th.style.color = "var(--text-tertiary)"; thead.appendChild(th); });
+  table.appendChild(thead);
+  top.forEach(({ c }) => {
+    const tr = document.createElement("tr");
+    const nameTd = document.createElement("td"); nameTd.className = "heatmap-name"; nameTd.textContent = c.name;
+    tr.appendChild(nameTd);
+    weekStarts.forEach((w) => {
+      const wEnd = new Date(w.getTime() + 7 * 86400000);
+      const count = D.SUBMISSIONS.filter((s) => s.candidateId === c.id && s.date >= w && s.date < wEnd).length;
+      const td = document.createElement("td");
+      const intensity = Math.min(1, count / 4);
+      const cell = document.createElement("div"); cell.className = "heatmap-cell";
+      cell.style.background = count === 0 ? "var(--surface-alt)" : `color-mix(in srgb, var(--accent) ${20 + intensity * 70}%, var(--surface-alt))`;
+      cell.title = `${c.name}: ${count} submissions week of ${w.toDateString()}`;
+      td.appendChild(cell);
+      tr.appendChild(td);
+    });
+    table.appendChild(tr);
+  });
+  host.innerHTML = "";
+  host.appendChild(table);
+}
+
+function renderTopPerformers(root) {
+  const filters = store.get();
+  const cands = D.CANDIDATES.filter((c) => D.matchesFilters(c, filters));
+  const withMetrics = cands.map((c) => Object.assign({ name: c.name, id: c.id, role: c.role }, candidateMetrics(c, filters)));
+  const s = section("⭐ Top Performers", "Ranked by placements, then submissions");
+  const c1 = card(); const host = document.createElement("div"); c1.appendChild(host); s.appendChild(c1); root.appendChild(s);
+  const top = withMetrics.sort((a, b) => b.placements - a.placements || b.submissions - a.submissions).slice(0, 15);
+  A.renderTable(host, [
+    { key: "name", label: "Candidate" }, { key: "role", label: "Role" },
+    { key: "submissions", label: "Subm.", align: "right" }, { key: "interviews", label: "Int.", align: "right" },
+    { key: "offers", label: "Off.", align: "right" }, { key: "placements", label: "Plc.", align: "right" },
+    { key: "interviewRate", label: "Int. %", align: "right", render: (r) => A.formatPercent(r.interviewRate) },
+  ], top, { onRowClick: (r) => { selectedCandidateId = r.id; activeTab = "individual"; renderTabs(); renderActive(); } });
+}
+
+function renderAtRisk(root) {
+  const filters = store.get();
+  const cands = D.CANDIDATES.filter((c) => D.matchesFilters(c, filters) && (c.status === "At Risk" || c.status === "Inactive")).sort((a, b) => b.idleDays - a.idleDays);
+  const s0 = section();
+  const kpiHost = document.createElement("div");
+  A.renderKPIBand(kpiHost, [
+    { label: "At Risk", value: A.formatNumber(cands.filter((c) => c.status === "At Risk").length) },
+    { label: "Inactive", value: A.formatNumber(cands.filter((c) => c.status === "Inactive").length) },
+    { label: "Avg. Idle Days", value: A.formatNumber(cands.length ? cands.reduce((s, c) => s + c.idleDays, 0) / cands.length : 0) },
+  ]);
+  s0.appendChild(kpiHost); root.appendChild(s0);
+  const s = section("⚠ Needs Attention", "No recent submission activity — sorted by longest idle first");
+  const c1 = card(); const host = document.createElement("div"); c1.appendChild(host); s.appendChild(c1); root.appendChild(s);
+  A.renderTable(host, [
+    { key: "name", label: "Candidate" }, { key: "role", label: "Role" },
+    { key: "status", label: "Status", render: (r) => `<span class="badge badge-${r.status.toLowerCase().replace(/\s/g, "")}">${r.status}</span>` },
+    { key: "idleDays", label: "Idle Days", align: "right" },
+    { key: "recruiter", label: "Recruiter", render: (r) => D.RECRUITERS.find((x) => x.id === r.recruiterId).name },
+  ], cands, { onRowClick: (r) => { selectedCandidateId = r.id; activeTab = "individual"; renderTabs(); renderActive(); } });
+}
+
+function renderCompare(root) {
+  const filters = store.get();
+  const cands = D.CANDIDATES.filter((c) => D.matchesFilters(c, filters));
+  if (compareIds[0] == null) compareIds[0] = cands[0] && cands[0].id;
+  if (compareIds[1] == null) compareIds[1] = cands[1] && cands[1].id;
+  const s = section("Compare Candidates");
+  const c1 = card();
+  const selRow = document.createElement("div"); selRow.style.display = "flex"; selRow.style.gap = "16px"; selRow.style.marginBottom = "16px";
+  [0, 1].forEach((idx) => {
+    const wrap = document.createElement("div"); wrap.className = "control";
+    wrap.innerHTML = `<label>Candidate ${idx + 1}</label>`;
+    const sel = document.createElement("select");
+    cands.forEach((c) => { const o = document.createElement("option"); o.value = c.id; o.textContent = c.name; if (c.id === compareIds[idx]) o.selected = true; sel.appendChild(o); });
+    sel.addEventListener("change", (e) => { compareIds[idx] = e.target.value; renderActive(); });
+    wrap.appendChild(sel);
+    selRow.appendChild(wrap);
+  });
+  c1.appendChild(selRow);
+  const tableHost = document.createElement("div"); c1.appendChild(tableHost);
+  s.appendChild(c1); root.appendChild(s);
+
+  const cA = D.candidateById[compareIds[0]], cB = D.candidateById[compareIds[1]];
+  if (cA && cB) {
+    const mA = candidateMetrics(cA, filters), mB = candidateMetrics(cB, filters);
+    const rows = [
+      ["Submissions", mA.submissions, mB.submissions],
+      ["Interviews", mA.interviews, mB.interviews],
+      ["Offers", mA.offers, mB.offers],
+      ["Placements", mA.placements, mB.placements],
+      ["Interview %", mA.interviewRate.toFixed(1) + "%", mB.interviewRate.toFixed(1) + "%"],
+      ["Offer %", mA.offerRate.toFixed(1) + "%", mB.offerRate.toFixed(1) + "%"],
+      ["Placement %", mA.placementRate.toFixed(1) + "%", mB.placementRate.toFixed(1) + "%"],
+      ["Bench Days", cA.benchDays, cB.benchDays],
+    ];
+    const table = document.createElement("table"); table.className = "data-table";
+    table.innerHTML = `<thead><tr><th>Metric</th><th class="num">${cA.name}</th><th class="num">${cB.name}</th></tr></thead>` +
+      "<tbody>" + rows.map((r) => `<tr><td>${r[0]}</td><td class="num">${r[1]}</td><td class="num">${r[2]}</td></tr>`).join("") + "</tbody>";
+    tableHost.innerHTML = ""; tableHost.appendChild(table);
+  }
+}
+
+function renderIndividual(root) {
+  const filters = store.get();
+  const cands = D.CANDIDATES.filter((c) => D.matchesFilters(c, filters));
+  if (!selectedCandidateId) selectedCandidateId = cands[0] && cands[0].id;
+  const wrap = document.createElement("div"); wrap.className = "section cand-picker";
+  const listHost = document.createElement("div"); listHost.className = "cand-list";
+  const withMetrics = cands.map((c) => Object.assign({ name: c.name, id: c.id }, candidateMetrics(c, filters)));
+  const topPerformers = [...withMetrics].sort((a, b) => b.placements - a.placements).slice(0, 5);
+  const needsAttention = cands.filter((c) => c.status === "At Risk" || c.status === "Inactive").sort((a, b) => b.idleDays - a.idleDays).slice(0, 5);
+  function listItem(id, label, prefix) {
+    const div = document.createElement("div"); div.className = "cand-list-item" + (id === selectedCandidateId ? " active" : "");
+    div.textContent = (prefix || "") + label;
+    div.addEventListener("click", () => { selectedCandidateId = id; renderActive(); });
+    return div;
+  }
+  listHost.innerHTML = `<div class="control"><input type="text" id="cand-search" placeholder="Search candidate..." style="width:100%;border:1px solid var(--border);border-radius:4px;padding:6px 8px;background:var(--surface);color:var(--text);font-size:12.5px;"/></div>`;
+  const grpTop = document.createElement("div"); grpTop.className = "cand-list-group"; grpTop.textContent = "Top Performers";
+  listHost.appendChild(grpTop);
+  topPerformers.forEach((c) => listHost.appendChild(listItem(c.id, c.name, "⭐ ")));
+  const grpRisk = document.createElement("div"); grpRisk.className = "cand-list-group"; grpRisk.textContent = "Needs Attention";
+  listHost.appendChild(grpRisk);
+  needsAttention.forEach((c) => listHost.appendChild(listItem(c.id, c.name, "⚠ ")));
+  const grpAll = document.createElement("div"); grpAll.className = "cand-list-group"; grpAll.textContent = "All Candidates";
+  listHost.appendChild(grpAll);
+  cands.slice(0, 40).forEach((c) => listHost.appendChild(listItem(c.id, c.name)));
+
+  const profileHost = document.createElement("div");
+  wrap.appendChild(listHost); wrap.appendChild(profileHost);
+  root.appendChild(wrap);
+
+  setTimeout(() => {
+    const searchEl = document.getElementById("cand-search");
+    if (searchEl) searchEl.addEventListener("input", (e) => {
+      const q = e.target.value.toLowerCase();
+      const match = cands.find((c) => c.name.toLowerCase().includes(q));
+      if (match) { selectedCandidateId = match.id; renderActive(); }
+    });
+  }, 0);
+
+  const c = D.candidateById[selectedCandidateId];
+  if (!c) { profileHost.innerHTML = '<div class="empty-note">No candidate selected</div>'; return; }
+  const m = candidateMetrics(c, filters);
+  const header = document.createElement("div"); header.className = "card";
+  header.innerHTML = `
+    <div class="profile-header">
+      <div>
+        <div class="profile-name">${c.name}</div>
+        <div class="profile-role">${c.role} · ${c.technology}</div>
+        <div class="profile-meta">
+          <span><span class="badge badge-${c.status.toLowerCase().replace(/\s/g, "")}">${c.status}</span></span>
+          <span>${c.benchDays} days on bench</span>
+          <span>Recruiter: ${D.RECRUITERS.find((r) => r.id === c.recruiterId).name}</span>
+          <span>Location: ${c.location}</span>
+          <span>Rate: $${c.rate}/hr</span>
+        </div>
+      </div>
+    </div>`;
+  profileHost.appendChild(header);
+
+  const kpiSection = document.createElement("div"); kpiSection.className = "section";
+  const kpiHost = document.createElement("div");
+  A.renderKPIBand(kpiHost, [
+    { label: "Submissions", value: A.formatNumber(m.submissions) },
+    { label: "Interviews", value: A.formatNumber(m.interviews) },
+    { label: "Offers", value: A.formatNumber(m.offers) },
+    { label: "Placements", value: A.formatNumber(m.placements) },
+    { label: "Interview Rate", value: A.formatPercent(m.interviewRate) },
+    { label: "Offer Rate", value: A.formatPercent(m.offerRate) },
+    { label: "Placement Rate", value: A.formatPercent(m.placementRate) },
+    { label: "Bench Days", value: A.formatNumber(c.benchDays) },
+  ]);
+  kpiSection.appendChild(kpiHost); profileHost.appendChild(kpiSection);
+
+  const grid = document.createElement("div"); grid.className = "section grid grid-2";
+  const trendCard = card(); trendCard.innerHTML = `<div class="card-header"><div class="card-title">Submission Trend</div></div><div class="chart-wrap"><canvas id="ind-trend"></canvas></div>`;
+  const platCard = card(); platCard.innerHTML = `<div class="card-header"><div class="card-title">Platform Performance</div></div><div class="chart-wrap"><canvas id="ind-platform"></canvas></div>`;
+  grid.appendChild(trendCard); grid.appendChild(platCard);
+  profileHost.appendChild(grid);
+
+  const grid2 = document.createElement("div"); grid2.className = "section grid grid-2";
+  const funnelCard = card(); funnelCard.innerHTML = `<div class="card-header"><div class="card-title">Candidate Journey</div></div><div id="ind-funnel"></div>`;
+  const jobsCard = card(); jobsCard.innerHTML = `<div class="card-header"><div class="card-title">Recent Submissions</div></div><div id="ind-jobs"></div>`;
+  grid2.appendChild(funnelCard); grid2.appendChild(jobsCard);
+  profileHost.appendChild(grid2);
+
+  const range = D.resolvePeriod(filters.periodKey);
+  const wideRange = [new Date(D.TODAY.getFullYear() - 1, D.TODAY.getMonth() + 1, 1), D.TODAY];
+  const series = D.monthlySeries(wideRange, { candidateId: c.id });
+  charts.indTrend = A.lineChart(document.getElementById("ind-trend"), series.map((s) => s.label), [{ label: "Submissions", data: series.map((s) => s.submissions), color: "--chart-1" }]);
+
+  const candSubs = D.SUBMISSIONS.filter((s) => s.candidateId === c.id);
+  const byPlatform = D.PLATFORMS.map((p) => ({ platform: p.name, count: candSubs.filter((s) => s.platformId === p.id).length })).filter((p) => p.count > 0);
+  charts.indPlatform = A.horizontalBarChart(document.getElementById("ind-platform"), byPlatform.map((p) => p.platform), byPlatform.map((p) => p.count), { color: "--chart-2" });
+
+  const stages = [
+    { stage: "Submitted", value: candSubs.length },
+    { stage: "Response", value: candSubs.filter((s) => s.stageIndex >= 1).length },
+    { stage: "Interview", value: D.INTERVIEWS.filter((i) => i.candidateId === c.id).length },
+    { stage: "Offer", value: D.OFFERS.filter((o) => o.candidateId === c.id).length },
+    { stage: "Placed", value: D.PLACEMENTS.filter((p) => p.candidateId === c.id).length },
+  ];
+  A.renderFunnel(document.getElementById("ind-funnel"), stages);
+
+  const recentSubs = candSubs.sort((a, b) => b.date - a.date).slice(0, 8);
+  A.renderTable(document.getElementById("ind-jobs"), [
+    { key: "client", label: "Client", render: (r) => D.CLIENTS.find((cl) => cl.id === r.clientId).name },
+    { key: "platform", label: "Platform", render: (r) => D.PLATFORMS.find((p) => p.id === r.platformId).name },
+    { key: "stage", label: "Stage" },
+    { key: "date", label: "Date", render: (r) => A.formatDate(r.date) },
+  ], recentSubs);
+}
+
+const RENDERERS = { candidates: renderCandidatesTab, top: renderTopPerformers, risk: renderAtRisk, compare: renderCompare, individual: renderIndividual };
+
+function renderActive() {
+  destroyCharts();
+  const root = document.getElementById("tab-content");
+  root.innerHTML = "";
+  A.activeFilterChips(document.getElementById("filter-chips"), store, []);
+  RENDERERS[activeTab](root);
+}
+
+store.subscribe(() => { renderChrome(); renderActive(); });
+window.addEventListener("bs-theme-change", () => renderActive());
+renderTabs();
+renderChrome();
+renderActive();
+A.wireGlobalSearch(document.getElementById("search-input"), document.getElementById("search-results"), (item) => {
+  if (item.type === "candidate") { selectedCandidateId = item.id; activeTab = "individual"; renderTabs(); renderActive(); }
+  if (item.type === "recruiter") { store.set({ recruiterId: item.id }); }
+  if (item.type === "role") { store.set({ roleId: item.id }); }
+  if (item.type === "client") { store.set({ clientId: item.id }); }
+  if (item.type === "platform") { store.set({ platformId: item.id }); }
+});
+</script>
+</body>
+</html>
